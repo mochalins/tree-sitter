@@ -6,5 +6,6 @@
         "build.zig.zon",
         "lib/src",
         "lib/include",
+        "lib/binding_zig",
     },
 }
