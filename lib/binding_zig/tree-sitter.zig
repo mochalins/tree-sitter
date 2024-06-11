@@ -26,6 +26,12 @@ pub const StateId = u16;
 pub const Symbol = u16;
 pub const FieldId = u16;
 
+test {
+    try std.testing.expectEqual(@TypeOf(c.TSStateId), @TypeOf(StateId));
+    try std.testing.expectEqual(@TypeOf(c.TSSymbol), @TypeOf(Symbol));
+    try std.testing.expectEqual(@TypeOf(c.TSFieldId), @TypeOf(FieldId));
+}
+
 pub const Language = opaque {};
 pub const Parser = opaque {};
 pub const LookaheadIterator = opaque {};
@@ -35,6 +41,21 @@ pub const SymbolType = enum(c_uint) {
     anonymous,
     auxiliary,
 };
+
+test {
+    try std.testing.expectEqual(
+        c.TSSymbolTypeRegular,
+        @intFromEnum(SymbolType.regular),
+    );
+    try std.testing.expectEqual(
+        c.TSSymbolTypeAnonymous,
+        @intFromEnum(SymbolType.anonymous),
+    );
+    try std.testing.expectEqual(
+        c.TSSymbolTypeAuxiliary,
+        @intFromEnum(SymbolType.auxiliary),
+    );
+}
 
 pub const Point = extern struct {
     row: u32,
@@ -47,6 +68,11 @@ pub const Range = extern struct {
     start_byte: u32,
     end_byte: u32,
 };
+
+test {
+    try std.testing.expectEqual(@sizeOf(c.TSPoint), @sizeOf(Point));
+    try std.testing.expectEqual(@sizeOf(c.TSRange), @sizeOf(Range));
+}
 
 pub const Input = extern struct {
     payload: ?*anyopaque,
@@ -73,10 +99,32 @@ pub const Input = extern struct {
     };
 };
 
+test {
+    try std.testing.expectEqual(@sizeOf(c.TSInput), @sizeOf(Input));
+    try std.testing.expectEqual(
+        @sizeOf(c.TSInputEncoding),
+        @sizeOf(Input.Encoding),
+    );
+    try std.testing.expectEqual(
+        c.TSInputEncodingUTF8,
+        @intFromEnum(Input.Encoding.utf8),
+    );
+    try std.testing.expectEqual(
+        c.TSInputEncodingUTF16,
+        @intFromEnum(Input.Encoding.utf16),
+    );
+    try std.testing.expectEqual(@sizeOf(c.TSInputEdit), @sizeOf(Input.Edit));
+}
+
 pub const LogType = enum(c_uint) {
     parse,
     lex,
 };
+
+test {
+    try std.testing.expectEqual(c.TSLogTypeParse, @intFromEnum(LogType.parse));
+    try std.testing.expectEqual(c.TSLogTypeLex, @intFromEnum(LogType.lex));
+}
 
 pub const Logger = extern struct {
     payload: ?*anyopaque,
@@ -87,11 +135,19 @@ pub const Logger = extern struct {
     ) callconv(.C) void,
 };
 
+test {
+    try std.testing.expectEqual(@sizeOf(c.TSLogger), @sizeOf(Logger));
+}
+
 pub const Node = extern struct {
     context: [4]u32,
     id: ?*anyopaque,
-    tree: [*c]Tree,
+    tree: ?*Tree,
 };
+
+test {
+    try std.testing.expectEqual(@sizeOf(c.TSNode), @sizeOf(Node));
+}
 
 pub const Tree = opaque {
     pub const Cursor = extern struct {
@@ -101,6 +157,10 @@ pub const Tree = opaque {
     };
 };
 
+test {
+    try std.testing.expectEqual(@sizeOf(c.TSTreeCursor), @sizeOf(Tree.Cursor));
+}
+
 pub const Quantifier = enum(c_uint) {
     zero = 0,
     zero_or_one,
@@ -108,6 +168,29 @@ pub const Quantifier = enum(c_uint) {
     one,
     one_or_more,
 };
+
+test {
+    try std.testing.expectEqual(
+        c.TSQuantifierZero,
+        @intFromEnum(Quantifier.zero),
+    );
+    try std.testing.expectEqual(
+        c.TSQuantifierZeroOrOne,
+        @intFromEnum(Quantifier.zero_or_one),
+    );
+    try std.testing.expectEqual(
+        c.TSQuantifierZeroOrMore,
+        @intFromEnum(Quantifier.zero_or_more),
+    );
+    try std.testing.expectEqual(
+        c.TSQuantifierOne,
+        @intFromEnum(Quantifier.one),
+    );
+    try std.testing.expectEqual(
+        c.TSQuantifierOneOrMore,
+        @intFromEnum(Quantifier.one_or_more),
+    );
+}
 
 pub const Query = opaque {
     pub const Cursor = opaque {};
