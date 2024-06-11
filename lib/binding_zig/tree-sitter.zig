@@ -32,9 +32,9 @@ test {
     try std.testing.expectEqual(@TypeOf(c.TSFieldId), @TypeOf(FieldId));
 }
 
-pub const Language = opaque {};
-pub const Parser = opaque {};
-pub const LookaheadIterator = opaque {};
+pub const Language = c.TSLanguage;
+pub const Parser = c.TSParser;
+pub const LookaheadIterator = c.TSLookaheadIterator;
 
 pub const SymbolType = enum(c_uint) {
     regular,
@@ -193,12 +193,19 @@ test {
 }
 
 pub const Query = opaque {
-    pub const Cursor = opaque {};
+    pub const Cursor = c.TSQueryCursor;
 
     pub const Capture = extern struct {
         node: Node,
         index: u32,
     };
+
+    test {
+        try std.testing.expectEqual(
+            @sizeOf(c.TSQueryCapture),
+            @sizeOf(Capture),
+        );
+    }
 
     pub const Match = extern struct {
         id: u32,
@@ -206,6 +213,10 @@ pub const Query = opaque {
         capture_count: u16,
         captures: [*]Capture,
     };
+
+    test {
+        try std.testing.expectEqual(@sizeOf(c.TSQueryMatch), @sizeOf(Match));
+    }
 
     pub const PredicateStep = extern struct {
         type: Type,
@@ -216,7 +227,29 @@ pub const Query = opaque {
             capture,
             string,
         };
+
+        test {
+            try std.testing.expectEqual(
+                c.TSQueryPredicateStepTypeDone,
+                @intFromEnum(Type.done),
+            );
+            try std.testing.expectEqual(
+                c.TSQueryPredicateStepTypeCapture,
+                @intFromEnum(Type.capture),
+            );
+            try std.testing.expectEqual(
+                c.TSQueryPredicateStepTypeString,
+                @intFromEnum(Type.string),
+            );
+        }
     };
+
+    test {
+        try std.testing.expectEqual(
+            @sizeOf(c.TSQueryPredicateStep),
+            @sizeOf(PredicateStep),
+        );
+    }
 
     pub const Error = enum(c_uint) {
         none = 0,
@@ -227,6 +260,37 @@ pub const Query = opaque {
         structure,
         language,
     };
+
+    test {
+        try std.testing.expectEqual(
+            c.TSQueryErrorNone,
+            @intFromEnum(Error.none),
+        );
+        try std.testing.expectEqual(
+            c.TSQueryErrorSyntax,
+            @intFromEnum(Error.syntax),
+        );
+        try std.testing.expectEqual(
+            c.TSQueryErrorNodeType,
+            @intFromEnum(Error.node_type),
+        );
+        try std.testing.expectEqual(
+            c.TSQueryErrorField,
+            @intFromEnum(Error.field),
+        );
+        try std.testing.expectEqual(
+            c.TSQueryErrorCapture,
+            @intFromEnum(Error.capture),
+        );
+        try std.testing.expectEqual(
+            c.TSQueryErrorStructure,
+            @intFromEnum(Error.structure),
+        );
+        try std.testing.expectEqual(
+            c.TSQueryErrorLanguage,
+            @intFromEnum(Error.language),
+        );
+    }
 };
 
 // ======================
@@ -234,15 +298,46 @@ pub const Query = opaque {
 // ======================
 
 /// Create a new parser.
-extern "tree-sitter" fn ts_parser_new() callconv(.C) Parser;
+extern "tree-sitter" fn ts_parser_new() callconv(.C) ?*Parser;
+
+test {
+    const parser: ?*Parser = ts_parser_new();
+    const c_parser: ?*c.TSParser = c.ts_parser_new();
+
+    if (parser == null) {
+        try std.testing.expectEqual(null, c_parser);
+    } else {
+        try std.testing.expect(c_parser != null);
+    }
+}
 
 /// Delete the parser, freeing all of the memory that it used.
 extern "tree-sitter" fn ts_parser_delete(self: *Parser) callconv(.C) void;
+
+test {
+    const c_parser: ?*c.TSParser = c.ts_parser_new();
+
+    if (c_parser) |parser| {
+        ts_parser_delete(@ptrCast(parser));
+    } else {
+        std.log.err("Parser memory allocation failed.", .{});
+    }
+}
 
 /// Get the parser's current language.
 extern "tree-sitter" fn ts_parser_language(
     self: *const Parser,
 ) callconv(.C) ?*const Language;
+
+test {
+    const p: ?*Parser = ts_parser_new();
+    if (p) |parser| {
+        const l = ts_parser_language(parser);
+        try std.testing.expect(l == null);
+    } else {
+        std.log.err("Parser memory allocation failed.", .{});
+    }
+}
 
 /// Set the language that the parser should use for parsing.
 ///
@@ -395,3 +490,928 @@ extern "tree-sitter" fn ts_parser_set_cancellation_flag(
 extern "tree-sitter" fn ts_parser_cancellation_flag(
     self: *const Parser,
 ) callconv(.C) ?*const isize;
+
+/// Set the logger that a parser should use during parsing.
+///
+/// The parser does not take ownership over the logger payload. If a logger was
+/// previously assigned, the caller is responsible for releasing any memory
+/// owned by the previous logger.
+extern "tree-sitter" fn ts_parser_set_logger(
+    self: *Parser,
+    logger: Logger,
+) callconv(.C) void;
+
+/// Get the parser's current logger.
+extern "tree-sitter" fn ts_parser_logger(
+    self: *const Parser,
+) callconv(.C) Logger;
+
+/// Set the file descriptor to which the parser should write debugging graphs
+/// during parsing. The graphs are formatted in the DOT language. You may want
+/// to pipe these graphs directly to a `dot(1)` process in order to generate
+/// SVG output. You can turn off this logging by passing a negative number.
+extern "tree-sitter" fn ts_parser_print_dot_graphs(
+    self: *Parser,
+    fd: std.fs.File.Handle,
+) callconv(.C) void;
+
+//====================
+//=  Section - Tree  =
+//====================
+
+/// Create a shallow copy of the syntax tree. This is very fast.
+///
+/// You need to copy a syntax tree in order to use it on more than one thread
+/// at a time, as syntax trees are not thread safe.
+extern "tree-sitter" fn ts_tree_copy(self: *const Tree) callconv(.C) ?*Tree;
+
+/// Delete the syntax tree, freeing all of the memory that it used.
+extern "tree-sitter" fn ts_tree_delete(self: *Tree) callconv(.C) void;
+
+/// Get the root node of the syntax tree.
+extern "tree-sitter" fn ts_tree_root_node(self: *const Tree) callconv(.C) Node;
+
+/// Get the root node of the syntax tree, but with its position shifted forward
+/// by the given offset.
+extern "tree-sitter" fn ts_tree_root_node_with_offset(
+    self: *const Tree,
+    offset_bytes: u32,
+    offset_extent: Point,
+) callconv(.C) Node;
+
+/// Get the language that was used to parse the syntax tree.
+extern "tree-sitter" fn ts_tree_language(
+    self: *const Tree,
+) callconv(.C) ?*Language;
+
+/// Get the array of included ranges that was used to parse the syntax tree.
+///
+/// The returned pointer must be freed by the caller.
+extern "tree-sitter" fn ts_tree_included_ranges(
+    self: *const Tree,
+    length: *u32,
+) callconv(.C) ?[*]Range;
+
+/// Edit the syntax tree to keep it in sync with source code that has been
+/// edited.
+///
+/// You must describe the edit both in terms of byte offsets and in terms of
+/// (row, column) coordinates.
+extern "tree-sitter" fn ts_tree_edit(
+    self: *Tree,
+    edit: *const Input.Edit,
+) callconv(.C) void;
+
+/// Compare an old edited syntax tree to a new syntax tree representing the
+/// same document, returning an array of ranges whose syntactic structure has
+/// changed.
+///
+/// For this to work correctly, the old syntax tree must have been edited such
+/// that its ranges match up to the new tree. Generally you'll want to call
+/// this function right after calling one of the [`ts_parser_parse`] functions.
+/// You need to pass the old tree that was passed to parse, as well as the new
+/// tree that was returned from that function.
+///
+/// The returned array is allocated using `malloc` and the caller is
+/// responsible for freeing it using `free`. The length of the array will be
+/// written to the given `length` pointer.
+extern "tree-sitter" fn ts_tree_get_changed_ranges(
+    old_tree: *const Tree,
+    new_tree: *const Tree,
+    length: *u32,
+) callconv(.C) ?*Range;
+
+/// Write a DOT graph describing the syntax tree to the given file.
+extern "tree-sitter" fn ts_tree_print_dot_graph(
+    self: *const Tree,
+    fd: std.fs.File.Handle,
+) callconv(.C) void;
+
+//====================
+//=  Section - Node  =
+//====================
+
+/// Get the node's type as a null-terminated string.
+extern "tree-sitter" fn ts_node_type(self: Node) callconv(.C) [*:0]const u8;
+
+/// Get the node's type as a numerical id.
+extern "tree-sitter" fn ts_node_symbol(self: Node) callconv(.C) Symbol;
+
+/// Get the node's language.
+extern "tree-sitter" fn ts_node_language(
+    self: Node,
+) callconv(.C) ?*const Language;
+
+/// Get the node's type as it appears in the grammar ignoring aliases as a
+/// null-terminated string.
+extern "tree-sitter" fn ts_node_grammar_type(
+    self: Node,
+) callconv(.C) [*:0]const u8;
+
+/// Get the node's type as a numerical id as it appears in the grammer ignoring
+/// aliases. This should be used in [`ts_language_next_state`] instead of
+/// [`ts_node_symbol`].
+extern "tree-sitter" fn ts_node_grammar_symbol(self: Node) callconv(.C) Symbol;
+
+/// Get the node's start byte.
+extern "tree-sitter" fn ts_node_start_byte(self: Node) callconv(.C) u32;
+
+/// Get the node's start position in terms of rows and columns.
+extern "tree-sitter" fn ts_node_start_point(self: Node) callconv(.C) Point;
+
+/// Get the node's end byte.
+extern "tree-sitter" fn ts_node_end_byte(self: Node) callconv(.C) u32;
+
+/// Get an S-expression representing the node as a string.
+///
+/// This string is allocated with `malloc` and the caller is responsible for
+/// freeing it using `free`.
+extern "tree-sitter" fn ts_node_string(self: Node) callconv(.C) [*:0]u8;
+
+/// Check if the node is null. Functions like [`ts_node_child`] and
+/// [`ts_node_next_sibling`] will return a null node to indicate that no such
+/// node was found.
+extern "tree-sitter" fn ts_node_is_null(self: Node) callconv(.C) bool;
+
+/// Check if the node is *named*. Named nodes correspond to named rules in the
+/// grammar, whereas *anonymous* nodes correspond to string literals in the
+/// grammar.
+extern "tree-sitter" fn ts_node_is_named(self: Node) callconv(.C) bool;
+
+/// Check if the node is *missing*. Missing nodes are inserted by the parser in
+/// order to recover from certain kinds of syntax errors.
+extern "tree-sitter" fn ts_node_is_missing(self: Node) callconv(.C) bool;
+
+/// Check if the node is *extra*. Extra nodes represent things like comments,
+/// which are not required the grammar, but can appear anywhere.
+extern "tree-sitter" fn ts_node_is_extra(self: Node) callconv(.C) bool;
+
+/// Check if a syntax node has been edited.
+extern "tree-sitter" fn ts_node_has_changes(self: Node) callconv(.C) bool;
+
+/// Check if the node is a syntax error or contains any syntax errors.
+extern "tree-sitter" fn ts_node_has_errors(self: Node) callconv(.C) bool;
+
+/// Check if the node is a syntax error.
+extern "tree-sitter" fn ts_node_is_error(self: Node) callconv(.C) bool;
+
+/// Get this node's parse state.
+extern "tree-sitter" fn ts_node_parse_state(self: Node) callconv(.C) StateId;
+
+/// Get the parse state after this node.
+extern "tree-sitter" fn ts_node_next_parse_state(
+    self: Node,
+) callconv(.C) StateId;
+
+/// Get the node's immediate parent.
+/// Prefer [`ts_node_child_containing_descendant`] for iterating over the
+/// node's ancestors.
+extern "tree-sitter" fn ts_node_parent(self: Node) callconv(.C) Node;
+
+/// Get the node's child that contains `descendant`.
+extern "tree-sitter" fn ts_node_child_containing_descendant(
+    self: Node,
+    descendant: Node,
+) callconv(.C) Node;
+
+/// Get the node's child at the given index, where zero represents the first
+/// child.
+extern "tree-sitter" fn ts_node_child(
+    self: Node,
+    child_index: u32,
+) callconv(.C) Node;
+
+/// Get the field name for node's child at the given index, where zero
+/// represents the first child. Returns `null`, if no field is found.
+extern "tree-sitter" fn ts_node_field_name_for_child(
+    self: Node,
+    child_index: u32,
+) callconv(.C) ?[*:0]const u8;
+
+/// Get the node's number of children.
+extern "tree-sitter" fn ts_node_child_count(self: Node) callconv(.C) u32;
+
+/// Get the node's *named* child at the given index.
+///
+/// See also [`ts_node_is_named`].
+extern "tree-sitter" fn ts_node_named_child(
+    self: Node,
+    child_index: u32,
+) callconv(.C) Node;
+
+/// Get the node's number of *named* children.
+///
+/// See also [`ts_node_is_named`].
+extern "tree-sitter" fn ts_node_named_child_count(self: Node) callconv(.C) u32;
+
+/// Get the node's child with the given field name.
+extern "tree-sitter" fn ts_node_child_by_field_name(
+    self: Node,
+    name: [*]const u8,
+    name_length: u32,
+) callconv(.C) Node;
+
+/// Get the node's child with the given numerical field id.
+///
+/// You can convert a field name to an id using the
+/// [`ts_language_field_id_for_name`] function.
+extern "tree-sitter" fn ts_node_child_by_field_id(
+    self: Node,
+    field_id: FieldId,
+) callconv(.C) Node;
+
+/// Get the node's next / previous sibling.
+extern "tree-sitter" fn ts_node_next_sibling(self: Node) callconv(.C) Node;
+extern "tree-sitter" fn ts_node_prev_sibling(self: Node) callconv(.C) Node;
+
+/// Get the node's next / previous *named* sibling.
+extern "tree-sitter" fn ts_node_next_named_sibling(
+    self: Node,
+) callconv(.C) Node;
+extern "tree-sitter" fn ts_node_prev_named_sibling(
+    self: Node,
+) callconv(.C) Node;
+
+/// Get the node's first child that extends beyond the given byte offset.
+extern "tree-sitter" fn ts_node_first_child_for_byte(
+    self: Node,
+    byte: u32,
+) callconv(.C) Node;
+
+/// Get the node's first named child that extends beyond the given byte offset.
+extern "tree-sitter" fn ts_node_first_named_child_for_byte(
+    self: Node,
+    byte: u32,
+) callconv(.C) Node;
+
+/// Get the node's number of descendants, including one for the node itself.
+extern "tree-sitter" fn ts_node_descendant_count(self: Node) callconv(.C) u32;
+
+/// Get the smallest node within this node that spans the given range of bytes
+/// or (row, column) positions.
+extern "tree-sitter" fn ts_node_descendant_for_byte_range(
+    self: Node,
+    start: u32,
+    end: u32,
+) callconv(.C) Node;
+extern "tree-sitter" fn ts_node_descendant_for_point_range(
+    self: Node,
+    start: Point,
+    end: Point,
+) callconv(.C) Node;
+
+/// Get the smallest named node within this node that spans the given range of
+/// bytes or (row, column) positions.
+extern "tree-sitter" fn ts_node_named_descendant_for_byte_range(
+    self: Node,
+    start: u32,
+    end: u32,
+) callconv(.C) Node;
+extern "tree-sitter" fn ts_node_named_descendant_for_point_range(
+    self: Node,
+    start: Point,
+    end: Point,
+) callconv(.C) Node;
+
+/// Edit the node to keep it in sync with source code that has been edited.
+///
+/// This function is only rarely needed. When you edit a syntax tree with the
+/// [`ts_tree_edit`] function, all of the nodes that you retrieve from the tree
+/// afterward will already reflect the edit. You only need to use
+/// [`ts_node_edit`] when you have a [`Node`] instance that you want to keep
+/// and continue to use after an edit.
+extern "tree-sitter" fn ts_node_edit(
+    self: *Node,
+    edit: *const Input.Edit,
+) callconv(.C) void;
+
+/// Check if two nodes are identical.
+extern "tree-sitter" fn ts_node_eq(self: Node, other: Node) callconv(.C) bool;
+
+//==========================
+//=  Section - TreeCursor  =
+//==========================
+
+/// Create a new tree cursor starting from the given node.
+///
+/// A tree cursor allows you to walk a syntax tree more efficiently than is
+/// possible using the [`Node`] functions. It is a mutable object that is
+/// always on a certain syntax node, and can be moved imperatively to different
+/// nodes.
+extern "tree-sitter" fn ts_tree_cursor_new(
+    node: Node,
+) callconv(.C) Tree.Cursor;
+
+/// Delete a tree cursor, freeing all of the memory that it used.
+extern "tree-sitter" fn ts_tree_cursor_delete(
+    self: *Tree.Cursor,
+) callconv(.C) void;
+
+/// Re-initialize a tree cursor to start at a different node.
+extern "tree-sitter" fn ts_tree_cursor_reset(
+    self: *Tree.Cursor,
+    node: Node,
+) callconv(.C) void;
+
+/// Re-initialize a tree cursor to the same position as another cursor.
+///
+/// Unlike [`ts_tree_cursor_reset`], this will not lose parent information and
+/// allows reusing already created cursors.
+extern "tree-sitter" fn ts_tree_cursor_reset_to(
+    dst: *Tree.Cursor,
+    src: *const Tree.Cursor,
+) callconv(.C) void;
+
+/// Get the tree cursor's current node.
+extern "tree-sitter" fn ts_tree_cursor_current_node(
+    self: *const Tree.Cursor,
+) callconv(.C) Node;
+
+/// Get the field name of the tree cursor's current node.
+///
+/// This returns `null` if the current node doesn't have a field.
+/// See also [`ts_node_child_by_field_name`].
+extern "tree-sitter" fn ts_tree_cursor_current_field_name(
+    self: *const Tree.Cursor,
+) callconv(.C) ?[*:0]const u8;
+
+/// Get the field id of the tree cursor's current node.
+///
+/// This returns zero if the current node doesn't have a field.
+/// See also [`ts_node_child_by_field_id`], [`ts_language_field_id_for_name`].
+extern "tree-sitter" fn ts_tree_cursor_current_field_id(
+    self: *const Tree.Cursor,
+) callconv(.C) FieldId;
+
+/// Move the cursor to the parent of its current node.
+///
+/// This returns `true` if the cursor successfully moevd, and returns `false`
+/// if there was no parent node (the cursor was already on the root node).
+extern "tree-sitter" fn ts_tree_cursor_goto_parent(
+    self: *Tree.Cursor,
+) callconv(.C) bool;
+
+/// Move the cursor to the next sibling of its current node.
+///
+/// This returns `true` if the cursor successfully moved, and returns `false`
+/// if there was no next sibling node.
+extern "tree-sitter" fn ts_tree_cursor_goto_next_sibling(
+    self: Tree.Cursor,
+) callconv(.C) bool;
+
+/// Move the cursor to the previous sibling of its current node.
+///
+/// This returns `true` if the cursor successfully moved, and returns `false`
+/// if there was no previous sibling node.
+///
+/// Note, that this function may be slower than
+/// [`ts_tree_cursor_goto_next_sibling`] due to how node positions are stored.
+/// In the worst case, this will need to iterate through all the children upto
+/// the previous sibling node to recalculate its position.
+extern "tree-sitter" fn ts_tree_cursor_goto_previous_sibling(
+    self: *Tree.Cursor,
+) callconv(.C) bool;
+
+/// Move the cursor to the first child of its current node.
+///
+/// This returns `true` if the cursor successfully moved, and returns `false`
+/// if there were no children.
+extern "tree-sitter" fn ts_tree_cursor_goto_first_child(
+    self: *Tree.Cursor,
+) callconv(.C) bool;
+
+/// Move the cursor to the last child of its current node.
+///
+/// This returns `true` if the cursor successfully moved, and returns `false`
+/// if there were no children.
+///
+/// Note that this function may be slower than
+/// [`ts_tree_cursor_goto_first_child`] because it needs to iterate through all
+/// the children to compute the child's position.
+extern "tree-sitter" fn ts_tree_cursor_goto_last_child(
+    self: *Tree.Cursor,
+) callconv(.C) bool;
+
+/// Move the cursor to the node that is the nth descendant of the original node
+/// that the cursor was constructed with, where zero represents the original
+/// node itself.
+extern "tree-sitter" fn ts_tree_cursor_goto_descendant(
+    self: *Tree.Cursor,
+    goal_descendant_index: u32,
+) callconv(.C) void;
+
+/// Get the index of the cursor's current node out of all of the descendants
+/// of the original node that the cursor was constructed with.
+extern "tree-sitter" fn ts_tree_cursor_descendant_index(
+    self: *const Tree.Cursor,
+) callconv(.C) u32;
+
+/// Get the depth of the cursor's current node relative to the original node
+/// that the cursor was constructed with.
+extern "tree-sitter" fn ts_tree_cursor_current_depth(
+    self: *const Tree.Cursor,
+) callconv(.C) u32;
+
+/// Move the cursor to the first child of its current node that extends beyond
+/// the given byte offset or point.
+///
+/// This returns the index of the child node if one was found, and returns -1
+/// if no such child was found.
+extern "tree-sitter" fn ts_tree_cursor_goto_first_child_for_byte(
+    self: *Tree.Cursor,
+    goal_byte: u32,
+) callconv(.C) i64;
+extern "tree-sitter" fn ts_tree_cursor_goto_first_child_for_point(
+    self: *Tree.Cursor,
+    goal_point: Point,
+) callconv(.C) i64;
+
+extern "tree-sitter" fn ts_tree_cursor_copy(
+    cursor: *const Tree.Cursor,
+) callconv(.C) Tree.Cursor;
+
+//=====================
+//=  Section - Query  =
+//=====================
+
+/// Create a new query from a string containing one or more S-expression
+/// patterns. The query is associated with a particular language, and can only
+/// be run on syntax nodes parsed with that language.
+///
+/// If all of the given patterns are valid, this returns a [`Query`].
+/// If a pattern is invalid, this returns `null`, and provides two pieces of
+/// information about the problem:
+/// 1. The byte offset of the error is written to the `error_offset` parameter.
+/// 2. The type of error is written to the `error_type` parameter.
+extern "tree-sitter" fn ts_query_new(
+    language: *const Language,
+    source: [*]const u8,
+    source_len: u32,
+    error_offset: *u32,
+    error_type: *Query.Error,
+) callconv(.C) ?*Query;
+
+/// Delete a query, freeing all of the memory that it used.
+extern "tree-sitter" fn ts_query_delete(self: *Query) callconv(.C) void;
+
+/// Get the number of patterns, captures, or string literals in the query.
+extern "tree-sitter" fn ts_query_pattern_count(
+    self: *const Query,
+) callconv(.C) u32;
+extern "tree-sitter" fn ts_query_capture_count(
+    self: *const Query,
+) callconv(.C) u32;
+extern "tree-sitter" fn ts_query_string_count(
+    self: *const Query,
+) callconv(.C) u32;
+
+/// Get the byte offset where the given pattern starts in the query's source.
+///
+/// This can be useful when combining queries by concatenating their source
+/// code strings.
+extern "tree-sitter" fn ts_query_start_byte_for_pattern(
+    self: *const Query,
+    pattern_index: u32,
+) callconv(.C) u32;
+
+/// Get all of the predicates for the given pattern in the query.
+///
+/// The predicates are represented as a single array of steps. There are three
+/// types of steps in this array, which correspond to the three legal values
+/// for the `type` field:
+/// - `Query.PredicateStep.Type.Capture` - Steps with this type represent names
+///   of captures. Their `value_id` can be used with the
+///   [`ts_query_capture_name_for_id`] function to obtain the name of the
+///   capture.
+/// - `Query.PredicateStep.Type.String` - Steps with this type represent
+///   literal strings. Their `value_id` can be used with the
+///   [`ts_query_string_value_for_id`] function to obtain their string value.
+/// - `Query.PredicateStep.Type.Done` - Steps with this type are *sentinels*
+///   that represent the end of an individual predicate. If a pattern has two
+///   predicates, then there will be two steps with this `type` in the array.
+extern "tree-sitter" fn ts_query_predicates_for_pattern(
+    self: *const Query,
+    pattern_index: u32,
+    step_count: *u32,
+) callconv(.C) *const Query.PredicateStep;
+
+/// Check if the given pattern in the query has a single root node.
+extern "tree-sitter" fn ts_query_is_pattern_rooted(
+    self: *const Query,
+    pattern_index: u32,
+) callconv(.C) bool;
+
+/// Check if the given pattern in the query is 'non local'.
+///
+/// A non-local pattern has multiple root nodes and can match within a
+/// repeating sequence of nodes, as specified by the grammar. Non-local
+/// patterns disable certain optimizations that would otherwise be possible
+/// when executing a query on a specific range of a syntax tree.
+extern "tree-sitter" fn ts_query_is_pattern_non_local(
+    self: *const Query,
+    pattern_index: u32,
+) callconv(.C) bool;
+
+/// Check if a given pattern is guaranteed to match once a given step is
+/// reached. The step is specified by its byte offset in the query's source
+/// code.
+extern "tree-sitter" fn ts_query_is_pattern_guaranteed_at_step(
+    self: *const Query,
+    byte_offset: u32,
+) callconv(.C) bool;
+
+/// Get the name and length of one of the query's captures, or one of the
+/// query's string literals. Each capture and string is associated with a
+/// numeric id based on the order that it appeared in the query's source.
+extern "tree-sitter" fn ts_query_capture_name_for_id(
+    self: *const Query,
+    index: u32,
+    length: *u32,
+) callconv(.C) [*:0]const u8;
+
+/// Get the quantifier of the query's captures. Each capture is associated with
+/// a numeric id based on the order that it appeared in the query's source.
+extern "tree-sitter" fn ts_query_capture_quantifier_for_id(
+    self: *const Query,
+    pattern_index: u32,
+    capture_index: u32,
+) callconv(.C) Quantifier;
+extern "tree-sitter" fn ts_query_string_value_for_id(
+    self: *const Query,
+    index: u32,
+    length: *u32,
+) callconv(.C) [*:0]const u8;
+
+/// Disable a certain capture within a query.
+///
+/// This prevents the capture from being returned in matches, and also avoids
+/// any resource usage associated with recording the capture. Currently, there
+/// is no way to undo this.
+extern "tree-sitter" fn ts_query_disable_capture(
+    self: *Query,
+    name: [*]const u8,
+    length: u32,
+) callconv(.C) void;
+
+/// Disable a certain pattern within a query.
+///
+/// This prevents the pattern from matching and removes most of the overhead
+/// associated with the pattern. Currently, there is no way to undo this.
+extern "tree-sitter" fn ts_query_disable_pattern(
+    self: *Query,
+    pattern_index: u32,
+) callconv(.C) void;
+
+/// Create a new cursor for executing a given query.
+///
+/// The cursor stores the state that is needed to iteratively search for
+/// matches. To use the query cursor, first call [`ts_query_cursor_exec`] to
+/// start running a given query on a given syntax node. Then, there are two
+/// options for consuming the results of the query:
+/// 1. Repeatedly call [`ts_query_cursor_next_match`] to iterate over all of
+///    the *matches* in the order that they were found. Each match contains the
+///    index of the pattern that matched, and an array of captures. Because
+///    multiple patterns can match the same set of nodes, one match may contain
+///    captures that appear *before* some of the captures from a previous match.
+/// 2. Repeatedly call [`ts_query_cursor_next_capture`] to iterate over all of
+///    the individual *captures* in the order that they appear. This is useful
+///    if don't care about which pattern matched, and just want a single
+///    ordered sequence of captures.
+///
+/// If you don't care about consuming all of the results. you can stop calling
+/// [`ts_query_cursor_next_match`] or [`ts_query_cursor_next_capture`] at any
+/// point. You can then start executing another query on another node by
+/// calling [`ts_query_cursor_exec`] gain.
+extern "tree-sitter" fn ts_query_cursor_new() callconv(.C) *Query.Cursor;
+
+/// Delete a query cursor, freeing all of the memory that it used.
+extern "tree-sitter" fn ts_query_cursor_delete(
+    self: *Query.Cursor,
+) callconv(.C) void;
+
+/// Start running a given query on a given node.
+extern "tree-sitter" fn ts_query_cursor_exec(
+    self: *Query.Cursor,
+    query: *const Query,
+    node: Node,
+) callconv(.C) void;
+
+/// Manage the maximum number of in-progress matches allowed by this query
+/// cursor.
+///
+/// Query cursors have an optional maximum capacity for storing lists of
+/// in-progress captures. If this capacity is exceeded, then the
+/// earliest-starting match will silently be dropped to make room for further
+/// matches. This maximum capacity is optional - by default, query cursors
+/// allow any number of pending matches, dynamically allocating new space for
+/// them as needed as the query is executed.
+extern "tree-sitter" fn ts_query_cursor_did_exceed_match_limit(
+    self: *const Query.Cursor,
+) callconv(.C) bool;
+extern "tree-sitter" fn ts_query_cursor_match_limit(
+    self: *const Query.Cursor,
+) callconv(.C) u32;
+extern "tree-sitter" fn ts_query_cursor_set_match_limit(
+    self: *Query.Cursor,
+    limit: u32,
+) callconv(.C) void;
+
+/// Set the range of bytes or (row, column) positions in which the query will
+/// be executed.
+extern "tree-sitter" fn ts_query_cursor_set_byte_range(
+    self: *Query.Cursor,
+    start_byte: u32,
+    end_byte: u32,
+) callconv(.C) void;
+extern "tree-sitter" fn ts_query_cursor_set_point_range(
+    self: *Query.Cursor,
+    start_point: Point,
+    end_point: Point,
+) callconv(.C) void;
+
+/// Advance to the next match of the currently running query.
+///
+/// If there is a match, write it to `*match` and return `true`.
+/// Otherwise, return `false`.
+extern "tree-sitter" fn ts_query_cursor_next_match(
+    self: *Query.Cursor,
+    match: *Query.Match,
+) callconv(.C) bool;
+extern "tree-sitter" fn ts_query_cursor_remove_match(
+    self: *Query.Cursor,
+    match_id: u32,
+) callconv(.C) void;
+
+/// Advance to the next capture of the currently running query.
+///
+/// If there is a capture, write its match to `*match` and its index within the
+/// match's capture list to `*capture_index`. Otherwise, return `false`.
+extern "tree-sitter" fn ts_query_cursor_next_capture(
+    self: *Query.Cursor,
+    match: *Query.Match,
+    capture_index: *u32,
+) callconv(.C) bool;
+
+/// Set the maximum start depth for a query cursor.
+///
+/// This prevents cursors from exploring children nodes at a certain depth.
+/// Note if a pattern includes many children, then they will still be checked.
+///
+/// The zero max start depth value can be used as a special behavior and it
+/// helps to destructure a subtree by staying on a node and using captures for
+/// interested parts. Note that the zero max start depth only limit a search
+/// depth for a pattern's root node but other nodes that are parts of the
+/// pattern may be searched at any depth what defined by the pattern structure.
+///
+/// Set to `UINT32_MAX` to remove the maximum start depth.
+extern "tree-sitter" fn ts_query_cursor_set_max_start_depth(
+    self: *Query.Cursor,
+    max_start_depth: u32,
+) callconv(.C) void;
+
+//========================
+//=  Section - Language  =
+//========================
+
+/// Get another reference to the given language.
+extern "tree-sitter" fn ts_language_copy(
+    self: *const Language,
+) callconv(.C) *const Language;
+
+/// Free any dynamically allocated resources for this language, if this is the
+/// last reference.
+extern "tree-sitter" fn ts_language_delete(
+    self: *const Language,
+) callconv(.C) void;
+
+/// Get the number of distinct node types in this language.
+extern "tree-sitter" fn ts_language_symbol_count(
+    self: *const Language,
+) callconv(.C) u32;
+
+/// Get the number of valid states in this language.
+extern "tree-sitter" fn ts_language_state_count(
+    self: *const Language,
+) callconv(.C) u32;
+
+/// Get a node type string for the given numerical id.
+extern "tree-sitter" fn ts_language_symbol_name(
+    self: *const Language,
+    symbol: Symbol,
+) callconv(.C) [*:0]const u8;
+
+/// Get the numerical id for the given node type string.
+extern "tree-sitter" fn ts_language_symbol_for_name(
+    self: *const Language,
+    string: [*]const u8,
+    length: u32,
+    is_named: bool,
+) callconv(.C) Symbol;
+
+/// Get the number of distinct field names in the language.
+extern "tree-sitter" fn ts_language_field_count(
+    self: *const Language,
+) callconv(.C) u32;
+
+/// Get the field name string for the given numerical id.
+extern "tree-sitter" fn ts_language_field_name_for_id(
+    self: *const Language,
+    id: FieldId,
+) callconv(.C) [*:0]const u8;
+
+/// Get the numerical id for the given field name string.
+extern "tree-sitter" fn ts_language_field_id_for_name(
+    self: *const Language,
+    name: [*]const u8,
+    name_length: u32,
+) callconv(.C) FieldId;
+
+/// Check whether the given node type id belongs to named nodes, anonymous
+/// nodes, or a hidden nodes.
+///
+/// See also [`ts_node_is_named`]. Hidden nodes are never returned from the API.
+extern "tree-sitter" fn ts_language_symbol_type(
+    self: *const Language,
+    symbol: Symbol,
+) callconv(.C) SymbolType;
+
+/// Get the ABI version number for this language. This version number is used
+/// to ensure that languages were generated by a compatible version of
+/// Tree-sitter.
+///
+/// See also [`ts_parser_set_language`].
+extern "tree-sitter" fn ts_language_version(
+    self: *const Language,
+) callconv(.C) u32;
+
+/// Get the next parse state. Combine this with lookahead iterators to generate
+/// completion suggestions or valid symbols in error nodes. Use
+/// [`ts_node_grammar_symbol`] for valid symbols.
+extern "tree-sitter" fn ts_language_next_state(
+    self: *const Language,
+    state: StateId,
+    symbol: Symbol,
+) callconv(.C) StateId;
+
+//=================================
+//=  Section - Lookahead Iterator =
+//=================================
+
+/// Create a new lookahead iterator for the given language and parse state.
+///
+/// This returns `null` if state is invalid for the language.
+///
+/// Repeatedly using [`ts_lookahead_iterator_next`] and
+/// [`ts_lookahead_iterator_current_symbol`] will generate valid symbols in the
+/// given parse state. Newly created lookahead iterators will contain the
+/// `ERROR` symbol.
+///
+/// Lookahead iterators can be useful to generate suggestions and improve
+/// syntax error diagnostics. To get symbols valid in an ERROR node, use the
+/// lookahead iterator on its first leaf node state. For `MISSING` nodes, a
+/// lookahead iterator created on the previous non-extra leaf node may be
+/// appropriate.
+extern "tree-sitter" fn ts_lookahead_iterator_new(
+    self: *const Language,
+    state: StateId,
+) callconv(.C) LookaheadIterator;
+
+/// Delete a lookahead iterator freeing all the memory used.
+extern "tree-sitter" fn ts_lookahead_iterator_delete(
+    self: *LookaheadIterator,
+) callconv(.C) void;
+
+/// Reset the lookahead iterator to another state.
+///
+/// This returns `true` if the iterator was reset to the given state and
+/// `false` otherwise.
+extern "tree-sitter" fn ts_lookahead_iterator_reset_state(
+    self: *LookaheadIterator,
+    state: StateId,
+) callconv(.C) bool;
+
+/// Reset the lookahead iterator.
+///
+/// This returns `true` if the language was set successfully and `false`
+/// otherwise.
+extern "tree-sitter" fn ts_lookahead_iterator_reset(
+    self: *LookaheadIterator,
+    language: *const Language,
+    state: StateId,
+) callconv(.C) bool;
+
+/// Get the current language of the lookahead iterator.
+extern "tree-sitter" fn ts_lookahead_iterator_language(
+    self: *const LookaheadIterator,
+) callconv(.C) ?*const Language;
+
+/// Advance the lookahead iterator to the next symbol.
+///
+/// This returns `true` if there is a new symbol and `false` otherwise.
+extern "tree-sitter" fn ts_lookahead_iterator_next(
+    self: *LookaheadIterator,
+) callconv(.C) bool;
+
+/// Get the current language of the lookahead iterator.
+extern "tree-sitter" fn ts_lookahead_iterator_current_symbol(
+    self: *const LookaheadIterator,
+) callconv(.C) Symbol;
+
+/// Get the current symbol type of the lookahead iterator as a null terminated
+/// string.
+extern "tree-sitter" fn ts_lookahead_iterator_current_symbol_name(
+    self: *const LookaheadIterator,
+) callconv(.C) [*:0]const u8;
+
+//=======================================
+//=  Section - WebAssembly Integration  =
+//=======================================
+
+pub const Wasm = struct {
+    pub const Engine = c.TSWasmEngine;
+    pub const Store = c.TSWasmStore;
+
+    pub const Error = extern struct {
+        kind: Kind,
+        message: [*:0]u8,
+
+        pub const Kind = enum(c_uint) {
+            none = 0,
+            parse,
+            compile,
+            instantiate,
+            allocate,
+        };
+    };
+};
+
+/// Create a Wasm store.
+extern "tree-sitter" fn ts_wasm_store_new(
+    engine: *Wasm.Engine,
+    err: *Wasm.Error,
+) callconv(.C) ?*Wasm.Store;
+
+/// Free the memory associated with the given Wasm store.
+extern "tree-sitter" fn ts_wasm_store_delete(_: *Wasm.Store) callconv(.C) void;
+
+/// Create a language from a buffer of Wasm. The resulting language behaves
+/// like any other Tree-sitter language, except that in order to use it with a
+/// parser, that parser must have a Wasm store. Note that the language can be
+/// used with any Wasm store, it doesn't need to be the same store that was
+/// used to originally load it.
+extern "tree-sitter" fn ts_wasm_store_load_language(
+    store: *Wasm.Store,
+    name: [*:0]const u8,
+    wasm: [*]const u8,
+    wasm_len: u32,
+    err: *Wasm.Error,
+) callconv(.C) *const Language;
+
+/// Get the number of languages instantiated in the given wasm store.
+extern "tree-sitter" fn ts_wasm_store_language_count(
+    store: *const Wasm.Store,
+) callconv(.C) usize;
+
+/// Check if the language came from a Wasm module. If so, then in order to use
+/// this language with a Parser, that parser must have a Wasm store assigned.
+extern "tree-sitter" fn ts_language_is_wasm(
+    language: *const Language,
+) callconv(.C) bool;
+
+/// Assign the given Wasm store to the parser. A parser must have a Wasm store
+/// in order to use Wasm languages.
+extern "tree-sitter" fn ts_language_set_wasm_store(
+    parser: *Parser,
+    store: *Wasm.Store,
+) callconv(.C) void;
+
+/// Remove the parser's current Wasm store and return it. This returns `null`
+/// if the parser doesn't have a Wasm store.
+extern "tree-sitter" fn ts_parser_take_wasm_store(
+    parser: *Parser,
+) callconv(.C) *Wasm.Store;
+
+//====================================
+//=  Section - Global Configuration  =
+//====================================
+
+/// Set the allocation functions used by the library.
+///
+/// By default, Tree-sitter uses the standard libc allocation functions, but
+/// aborts the process when an allocation fails. This function lets you supply
+/// alternative allocation functions at runtime.
+///
+/// If you pass `null` for any parameter, Tree-sitter will switch back to its
+/// default implementation of that function.
+///
+/// If you call this function after the library has already been used, then you
+/// must ensure that either:
+///  1. All the existing objects have been freed.
+///  2. The new allocator shares its state with the old one, so it is capable
+///     of freeing memory that was allocated by the old allocator.
+extern "tree-sitter" fn ts_set_allocator(
+    new_malloc: ?*fn (_: usize) callconv(.C) ?*anyopaque,
+    new_calloc: ?*fn (_: usize, _: usize) callconv(.C) ?*anyopaque,
+    new_realloc: ?*fn (_: ?*anyopaque, _: usize) callconv(.C) ?*anyopaque,
+    new_free: ?*fn (_: ?*anyopaque) callconv(.C) void,
+) callconv(.C) void;
